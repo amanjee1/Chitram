@@ -1,4 +1,5 @@
 import api from './client.js';
+export { errMsg } from './client.js';
 
 // Thin wrappers around the backend REST API. Each returns response.data.
 const data = (p) => p.then((r) => r.data);
@@ -20,6 +21,7 @@ export const userApi = {
 
 export const workApi = {
   list: (params) => data(api.get('/works', { params })),
+  following: (params) => data(api.get('/works/following', { params })),
   get: (id) => data(api.get(`/works/${id}`)),
   create: (formDataOrBody, isMultipart) =>
     data(
@@ -63,4 +65,10 @@ export const insightApi = {
   overview: () => data(api.get('/insights/overview')),
   trends: (days = 30) => data(api.get('/insights/trends', { params: { days } })),
   work: (id, days = 30) => data(api.get(`/insights/works/${id}`, { params: { days } })),
+};
+
+export const aiApi = {
+  suggest: (body) => data(api.post('/ai/suggest', body)),
+  suggestTags: (body) => data(api.post('/ai/tags', body)),
+  polish: (body) => data(api.post('/ai/polish', body)),
 };

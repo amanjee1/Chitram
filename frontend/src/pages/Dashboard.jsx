@@ -10,7 +10,7 @@ import {
   CartesianGrid,
   Legend,
 } from 'recharts';
-import { Eye, Heart, Bookmark, MessageCircle, Image as ImageIcon, Trash2, Plus } from 'lucide-react';
+import { Eye, Heart, Bookmark, MessageCircle, Image as ImageIcon, Trash2, Plus, TrendingUp, X } from 'lucide-react';
 import Spinner from '../components/Spinner.jsx';
 import EmptyState from '../components/EmptyState.jsx';
 import { insightApi, userApi, workApi, errMsg } from '../api/endpoints.js';
@@ -31,6 +31,7 @@ export default function Dashboard() {
   const [boards, setBoards] = useState([]);
   const [days, setDays] = useState(30);
   const [loading, setLoading] = useState(true);
+  const [workInsight, setWorkInsight] = useState(null); // { id, title, series } | null
 
   const loadTrends = (d) => {
     insightApi.trends(d).then((r) => setSeries(r.series || [])).catch(() => {});
@@ -58,9 +59,21 @@ export default function Dashboard() {
     try {
       await workApi.remove(id);
       setWorks((w) => w.filter((x) => x._id !== id));
+      if (workInsight?.id === id) setWorkInsight(null);
       toast.success('Deleted');
     } catch (err) {
       toast.error(errMsg(err));
+    }
+  };
+
+  const openWorkInsight = async (w) => {
+    if (workInsight?.id === w._id) { setWorkInsight(null); return; }
+    setWorkInsight({ id: w._id, title: w.title, series: null });
+    try {
+      const r = await insightApi.work(w._id, 30);
+      setWorkInsight({ id: w._id, title: w.title, series: r.series || [] });
+    } catch {
+      setWorkInsight(null);
     }
   };
 
@@ -141,25 +154,72 @@ export default function Dashboard() {
         ) : (
           <div className="overflow-hidden rounded-card ring-1 ring-ink/10">
             {works.map((w) => (
-              <div key={w._id} className="flex items-center gap-4 border-b border-ink/5 bg-white p-3 last:border-0">
-                <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-cream">
-                  {w.thumbnailUrl ? (
-                    <img src={w.thumbnailUrl} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="grid h-full place-items-center text-ink/30"><ImageIcon className="h-5 w-5" /></div>
-                  )}
+              <div key={w._id}>
+                <div className="flex items-center gap-4 border-b border-ink/5 bg-white p-3 last:border-0">
+                  <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-cream">
+                    {w.thumbnailUrl ? (
+                      <img src={w.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="grid h-full place-items-center text-ink/30"><ImageIcon className="h-5 w-5" /></div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <Link to={`/works/${w._id}`} className="block truncate font-semibold text-ink hover:text-magenta">
+                      {w.title}
+                    </Link>
+                    <p className="font-mono text-[11px] uppercase tracking-wider text-ink/40">
+                      {w.category} · {w.viewCount} views · {w.likeCount} likes
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => openWorkInsight(w)}
+                    title="Per-work insights"
+                    className={`text-ink/30 hover:text-royal ${workInsight?.id === w._id ? 'text-royal' : ''}`}
+                  >
+                    <TrendingUp className="h-4 w-4" />
+                  </button>
+                  <button onClick={() => removeWork(w._id)} className="text-ink/30 hover:text-magenta">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <Link to={`/works/${w._id}`} className="block truncate font-semibold text-ink hover:text-magenta">
-                    {w.title}
-                  </Link>
-                  <p className="font-mono text-[11px] uppercase tracking-wider text-ink/40">
-                    {w.category} · {w.viewCount} views · {w.likeCount} likes
-                  </p>
-                </div>
-                <button onClick={() => removeWork(w._id)} className="text-ink/30 hover:text-magenta">
-                  <Trash2 className="h-4 w-4" />
-                </button>
+
+                {/* Expandable per-work insight chart */}
+                {workInsight?.id === w._id && (
+                  <div className="border-b border-ink/5 bg-cream/40 px-4 py-5">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                        30-day engagement · {w.title}
+                      </p>
+                      <button onClick={() => setWorkInsight(null)} className="text-ink/30 hover:text-ink">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    {workInsight.series === null ? (
+                      <p className="text-sm text-ink/40">Loading…</p>
+                    ) : workInsight.series.length === 0 ? (
+                      <p className="text-sm text-ink/40">No engagement data yet for this work.</p>
+                    ) : (
+                      <div className="h-40 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={workInsight.series} margin={{ top: 5, right: 5, left: -30, bottom: 0 }}>
+                            <defs>
+                              <linearGradient id="gwV" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#1f43ff" stopOpacity={0.25} />
+                                <stop offset="95%" stopColor="#1f43ff" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                            <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#999' }} tickFormatter={(d) => d?.slice(5)} />
+                            <YAxis tick={{ fontSize: 10, fill: '#999' }} allowDecimals={false} />
+                            <Tooltip />
+                            <Area type="monotone" dataKey="views" stroke="#1f43ff" fill="url(#gwV)" strokeWidth={2} />
+                            <Area type="monotone" dataKey="likes" stroke="#c4137f" fillOpacity={0} strokeWidth={2} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

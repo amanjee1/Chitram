@@ -2,6 +2,7 @@ import Work, { CATEGORIES } from '../models/Work.js';
 import Comment from '../models/Comment.js';
 import Activity from '../models/Activity.js';
 import Board from '../models/Board.js';
+import User from '../models/User.js';
 import cloudinary from '../config/cloudinary.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
@@ -9,21 +10,18 @@ import {
   aiEnabled,
   buildEmbeddingText,
   generateEmbedding,
-  generateTagsAndCategory,
 } from '../services/aiService.js';
+import { moderateContent } from '../services/moderationService.js';
 import { findSimilarByVector } from '../services/vectorService.js';
 
 const logActivity = (type, workId, userId) =>
   Activity.create({ type, work: workId, user: userId || null }).catch(() => {});
 
-// Run AI enrichment (auto-tags, suggested category, embedding) and persist.
+// Generate and store a text embedding for the work to power similarity search and recommendations.
 // Best-effort: failures never block the upload.
 const enrichWorkWithAI = async (work) => {
   if (!aiEnabled()) return;
-  const { tags, category } = await generateTagsAndCategory(work);
-  if (tags.length) work.aiTags = tags;
-  if (category) work.aiCategory = category;
-  const embedding = await generateEmbedding(buildEmbeddingText({ ...work.toObject(), aiTags: work.aiTags }));
+  const embedding = await generateEmbedding(buildEmbeddingText(work.toObject()));
   if (embedding) work.embedding = embedding;
   await work.save();
 };
@@ -42,6 +40,10 @@ export const createWork = asyncHandler(async (req, res) => {
   let tags = req.body.tags;
   if (typeof tags === 'string') tags = tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
 
+  // Content moderation — block policy violations before any DB write.
+  const mod = moderateContent({ title, description, tags, textContent });
+  if (mod.status === 'blocked') throw ApiError.badRequest(mod.reason);
+
   const work = await Work.create({
     title,
     description,
@@ -49,6 +51,7 @@ export const createWork = asyncHandler(async (req, res) => {
     category: CATEGORIES.includes(category) ? category : 'other',
     textContent: workType === 'writing' ? textContent : '',
     tags: Array.isArray(tags) ? tags : [],
+    license: req.body.license || 'free',
     owner: req.user._id,
     mediaUrl: req.file?.path || '',
     mediaPublicId: req.file?.filename || '',
@@ -111,6 +114,7 @@ export const updateWork = asyncHandler(async (req, res) => {
   if (category !== undefined && CATEGORIES.includes(category)) work.category = category;
   if (textContent !== undefined && work.type === 'writing') work.textContent = textContent;
   if (isPublic !== undefined) work.isPublic = isPublic;
+  if (req.body.license !== undefined) work.license = req.body.license;
   if (req.body.tags !== undefined) {
     let tags = req.body.tags;
     if (typeof tags === 'string') tags = tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
@@ -193,4 +197,29 @@ export const getSimilarWorks = asyncHandler(async (req, res) => {
     excludeIds: [work._id],
   });
   res.json({ success: true, items });
+});
+
+// GET /api/works/following  (works by artists the logged-in user follows)
+export const getFollowingWorks = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id).select('following');
+  const following = user?.following || [];
+
+  if (!following.length) {
+    return res.json({ success: true, items: [], total: 0, totalPages: 0, page: 1 });
+  }
+
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(24, parseInt(req.query.limit, 10) || 24);
+  const filter = { isPublic: true, owner: { $in: following } };
+
+  const [items, total] = await Promise.all([
+    Work.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('owner', 'name username avatar'),
+    Work.countDocuments(filter),
+  ]);
+
+  res.json({ success: true, page, limit, total, totalPages: Math.ceil(total / limit), items });
 });
